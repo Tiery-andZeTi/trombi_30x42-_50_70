@@ -1,11 +1,10 @@
 import os
 import re
 import sys
-from math import floor
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image, ImageFilter, ImageOps
 
 try:
     import tkinter as tk
