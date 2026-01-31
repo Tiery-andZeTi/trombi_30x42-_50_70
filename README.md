@@ -12,7 +12,7 @@ L’application dispose d’une interface graphique réalisée avec Tkinter, en 
 ## Installation et prérequis (version Python)
 
 - Installer Python (version 3.10 ou supérieure).
-- Installer les bibliothèques nécessaires : Pillow, Tkinter.
+- Installer les bibliothèques nécessaires : Pillow.
 - Télécharger les fichiers du dépôt sur votre ordinateur.
 
 Pour lancer le programme :
@@ -44,5 +44,5 @@ python Trombi_ecole.py
 Ce projet est en cours d’amélioration.  
 Il peut encore contenir des bugs ou des comportements non finalisés.  
 Toutes remarques ou suggestions sont les bienvenues.
-
+A bientôt.
 
