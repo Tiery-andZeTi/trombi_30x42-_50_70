@@ -195,9 +195,10 @@ afficher « photo n / N » via `update_idletasks()`.
 - Les `except Exception:` sans message n'enregistrent **aucune raison** d'échec :
   un fichier atterrit dans `bad_files` sans qu'on sache pourquoi.
 - **`Trombi_ecole.py:390`** — le canevas est entièrement transparent, donc rien
-  ne distingue visuellement la zone-titre réservée. **Intentionnel** (PNG posé
-  sur un fond dans un logiciel de mise en page) **ou oubli ?** À clarifier dans
-  le README.
+  ne distingue visuellement la zone-titre réservée. **Confirmé intentionnel le
+  23/08/2026 par Thierry** : le PNG sert de calque Photoshop posé sur un fond
+  préparé à l'avance, commun à presque toutes les écoles. Rien à corriger ici,
+  juste à documenter dans le README.
 - `Trombi_Ecole_V05.exe` (16 Mo) est versionné dans git. Pas dramatique, mais
   chaque nouvelle version ajoutera 16 Mo **définitifs** à l'historique du dépôt.
 
@@ -214,6 +215,26 @@ ne dépend de Tkinter. Elles se testent en quelques lignes, sans image.
 moins : la somme des capacités des 4 zones, la non-régression du tri naturel sur
 les noms `0000.jpg` / `0103_ard.jpg`, et le fait qu'on place bien **toutes** les
 photos demandées (ce qui attraperait le point §4a).
+
+## Idées notées le 23/08/2026, écartées pour cette session
+
+Discutées avec Thierry, volontairement pas traitées maintenant.
+
+### La zone-titre pourrait devenir un cercle plutôt qu'un rectangle
+
+L'an dernier, rectangle vide au centre. Cette année, ce pourrait être un
+cercle vide. **Idée pour une saison future, pas pour maintenant** — non
+tranché. À noter : ce n'est pas qu'un changement cosmétique, la zone-titre
+sert aussi à calculer les 4 zones (`compute_zones`) en excluant son
+rectangle englobant ; un cercle changerait la géométrie d'exclusion, pas
+seulement le rendu.
+
+### Exclure aussi les photos frère/sœur via `multivisage.json`
+
+AutoIndiv écrit (ou écrira) un `multivisage.json` qui pourrait servir, en
+plus de `trombi_keep.txt`, à exclure automatiquement les photos où plusieurs
+visages sont détectés (fratries). **Idée pour plus tard**, pas cadrée, pas de
+format ni d'emplacement de fichier discutés.
 
 ## Ordre d'attaque recommandé
 

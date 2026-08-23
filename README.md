@@ -8,6 +8,7 @@ L’application dispose d’une interface graphique réalisée avec Tkinter, en 
 - Génération de trombinoscopes en 30x42 cm ou 50x70 cm.
 - Interface graphique simple pour choisir les dossiers et options.
 - Possibilité d’ignorer certaines photos indésirables via le fichier `trombi_keep.txt`.
+- Photos d’entrée acceptées : JPG uniquement (le PNG est réservé à la sortie).
 
 ## Installation et prérequis (version Python)
 
@@ -31,13 +32,12 @@ python Trombi_ecole.py
 
 - `Trombi_ecole.py` : script Python principal.
 - `Trombi_Ecole_V05.exe` : version exécutable pour Windows.
-- `trombi_keep.txt` : liste les photos à ne pas utiliser dans le trombi, une par ligne, avec le nom exact du fichier et son extension.  
+- `trombi_keep.txt` (optionnel) : liste les photos à **inclure** dans le trombi, une par ligne, avec le nom exact du fichier et son extension. Sert notamment à exclure automatiquement les ardoises. Si le fichier est absent, toutes les photos du dossier sont utilisées.  
   Exemple :
-  - `0000.jpg`
+  - `0001.jpg`
   - `0005.JPG`
-  - `0011.png`
 
-> Remarque : ce fichier peut être généré automatiquement par un autre script.
+> Remarque : ce fichier est généré automatiquement par AutoIndiv.
 
 ## État actuel du projet
 

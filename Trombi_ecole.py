@@ -43,6 +43,9 @@ USM_THRESHOLD = 2
 # Mode mémoire basse : traite image par image (recommandé)
 LOW_MEMORY_MODE = True
 
+# Hauteur de cellule minimale plausible, sous laquelle une vignette n'a plus de sens
+CELL_HEIGHT_MIN_PX = 20
+
 # =========================
 # 2) UTILITAIRES
 # =========================
@@ -72,17 +75,27 @@ def natural_sort_key(filename: str) -> Tuple[int, int, str]:
 
 
 def list_images_non_recursive(folder: str) -> List[str]:
-    exts = {".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG"}
+    exts = {".jpg", ".jpeg"}
     paths = []
     try:
         for name in os.listdir(folder):
             p = os.path.join(folder, name)
-            if os.path.isfile(p) and os.path.splitext(name)[1] in exts:
+            if os.path.isfile(p) and os.path.splitext(name)[1].lower() in exts:
                 paths.append(p)
     except FileNotFoundError:
         return []
     paths.sort(key=natural_sort_key)
     return paths
+
+
+def read_trombi_keep(folder: str) -> Optional[set]:
+    """Lit trombi_keep.txt s'il existe : liste d'inclusion (un nom de fichier par ligne).
+    Retourne None si le fichier est absent (aucun filtrage)."""
+    keep_path = os.path.join(folder, "trombi_keep.txt")
+    if not os.path.isfile(keep_path):
+        return None
+    with open(keep_path, "r", encoding="utf-8") as f:
+        return {line.strip() for line in f if line.strip()}
 
 
 def is_readable_image(path: str) -> bool:
@@ -196,7 +209,7 @@ def total_capacity(
 def find_best_cell_height(
     W: int, H: int, n_images: int
 ) -> Tuple[int, Tuple[Tuple[int, int, int], ...]]:
-    h_min = 20
+    h_min = CELL_HEIGHT_MIN_PX
     top, left, right, bottom = compute_zones(W, H)
     h_max_plausible = max(top.h, left.h, right.h, bottom.h)
     h_max = max(h_min, h_max_plausible)
@@ -338,6 +351,14 @@ def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
 
     W, H = FORMATS_PX[fmt_key]
     files_all = list_images_non_recursive(folder)
+
+    keep_names = read_trombi_keep(folder)
+    excluded_by_keep = 0
+    if keep_names is not None:
+        before = len(files_all)
+        files_all = [p for p in files_all if os.path.basename(p) in keep_names]
+        excluded_by_keep = before - len(files_all)
+
     if not files_all:
         raise RuntimeError("Dossier vide ou introuvable.")
 
@@ -363,6 +384,14 @@ def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
     # Zones et répartitions
     top, left, right, bottom = compute_zones(W, H)
     caps_values = [c for (_, _, c) in caps]
+
+    if sum(caps_values) < N:
+        max_capacity, _ = total_capacity(W, H, CELL_HEIGHT_MIN_PX)
+        raise RuntimeError(
+            f"{N} photos ne tiennent pas dans le format {fmt_key} "
+            f"(capacité maximale à hauteur de cellule minimale : {max_capacity}). "
+            "Réduire le nombre de photos ou choisir un format plus grand."
+        )
 
     remaining = N
     zone_counts = [0, 0, 0, 0]
@@ -435,6 +464,9 @@ def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
         summary += "\nFichiers ignorés: " + ", ".join(bad_files[:10])
         if len(bad_files) > 10:
             summary += f" … (+{len(bad_files) - 10})"
+
+    if keep_names is not None:
+        summary += f"\ntrombi_keep.txt détecté : {excluded_by_keep} photo(s) exclue(s) (hors liste, ex. ardoises)"
 
     return summary
 
