@@ -1,3 +1,4 @@
+import concurrent.futures as cf
 import os
 import re
 import sys
@@ -45,6 +46,9 @@ LOW_MEMORY_MODE = True
 
 # Hauteur de cellule minimale plausible, sous laquelle une vignette n'a plus de sens
 CELL_HEIGHT_MIN_PX = 20
+
+# Traitement des photos en parallele (decodage/redimensionnement/cadre)
+MAX_WORKERS = max(1, (os.cpu_count() or 1) - 1)
 
 # =========================
 # 2) UTILITAIRES
@@ -98,13 +102,28 @@ def read_trombi_keep(folder: str) -> Optional[set]:
         return {line.strip() for line in f if line.strip()}
 
 
-def is_readable_image(path: str) -> bool:
-    try:
-        with Image.open(path) as im:
-            im.verify()  # validation rapide sans décoder entièrement
-        return True
-    except Exception:
-        return False
+def classify_images(paths: List[str]) -> Tuple[List[str], List[str], List[str]]:
+    """Un seul passage par fichier : verifie la lisibilite et separe
+    portraits / horizontales (orientation EXIF prise en compte).
+    Retourne (portraits, horizontales, fichiers illisibles)."""
+    portraits: List[str] = []
+    landscapes: List[str] = []
+    bad: List[str] = []
+    for p in paths:
+        try:
+            with Image.open(p) as im:
+                w, h = im.size
+                orientation = im.getexif().get(274, 1)
+                if orientation in (5, 6, 7, 8):
+                    w, h = h, w
+                im.verify()  # validation, sans decoder les pixels
+            if w > h:
+                landscapes.append(p)
+            else:
+                portraits.append(p)
+        except Exception:
+            bad.append(os.path.basename(p))
+    return portraits, landscapes, bad
 
 
 @dataclass
@@ -124,7 +143,7 @@ class Rect:
 
 
 # =========================
-# 3) CALCUL ZONE-TITRE & AIRES
+# 3) ZONE-TITRE & GRILLE UNIQUE
 # =========================
 
 
@@ -142,7 +161,86 @@ def intersect(a: Rect, b: Rect) -> Rect:
     return Rect(max(a.x0, b.x0), max(a.y0, b.y0), min(a.x1, b.x1), min(a.y1, b.y1))
 
 
-def compute_zones(W: int, H: int) -> Tuple[Rect, Rect, Rect, Rect]:
+def build_grid_rows(
+    area: Rect, w_eff_cell: int, h_eff_cell: int, hole: Optional[Rect] = None
+) -> List[List[Tuple[int, int]]]:
+    """Grille a pas constant sur toute la zone, en sautant les cellules qui
+    chevauchent 'hole' (le rectangle du titre). Une seule grille continue,
+    pas des zones independantes : les colonnes restent alignees de part et
+    d'autre du trou."""
+    if area.w <= 0 or area.h <= 0 or w_eff_cell <= 0 or h_eff_cell <= 0:
+        return []
+
+    cols = max(0, (area.w + GOUTTIERE_PX) // (w_eff_cell + GOUTTIERE_PX))
+    rows = max(0, (area.h + GOUTTIERE_PX) // (h_eff_cell + GOUTTIERE_PX))
+    if cols <= 0 or rows <= 0:
+        return []
+
+    total_w = cols * w_eff_cell + (cols - 1) * GOUTTIERE_PX
+    total_h = rows * h_eff_cell + (rows - 1) * GOUTTIERE_PX
+    x0 = area.x0 + max(0, (area.w - total_w) // 2)
+    y0 = area.y0 + max(0, (area.h - total_h) // 2)
+
+    grid: List[List[Tuple[int, int]]] = []
+    for r in range(rows):
+        y = y0 + r * (h_eff_cell + GOUTTIERE_PX)
+        row: List[Tuple[int, int]] = []
+        for c in range(cols):
+            x = x0 + c * (w_eff_cell + GOUTTIERE_PX)
+            if hole is not None:
+                cell = Rect(x, y, x + w_eff_cell, y + h_eff_cell)
+                inter = intersect(cell, hole)
+                if inter.w > 0 and inter.h > 0:
+                    continue
+            row.append((x, y))
+        grid.append(row)
+    return grid
+
+
+def place_in_grid_rows(
+    grid: List[List[Tuple[int, int]]], count: int, w_eff_cell: int
+) -> List[Tuple[int, int]]:
+    """Place 'count' photos ligne par ligne. Si la derniere ligne utilisee
+    n'est pas remplie, le groupe est centre dans la largeur de la ligne au
+    meme pas que les autres, plutot que d'etirer l'espacement entre photos."""
+    positions: List[Tuple[int, int]] = []
+    placed = 0
+    for row in grid:
+        if placed >= count:
+            break
+        if not row:
+            continue
+        n_in_row = min(len(row), count - placed)
+        if n_in_row < len(row):
+            row_span = (row[-1][0] + w_eff_cell) - row[0][0]
+            used_span = n_in_row * w_eff_cell + (n_in_row - 1) * GOUTTIERE_PX
+            base_x = row[0][0] + max(0, (row_span - used_span) // 2)
+            y = row[0][1]
+            for i in range(n_in_row):
+                positions.append((base_x + i * (w_eff_cell + GOUTTIERE_PX), y))
+        else:
+            positions.extend(row)
+        placed += n_in_row
+    return positions
+
+
+# =========================
+# 4) DIMENSIONNEMENT (verticales + horizontales groupees)
+# =========================
+
+
+def landscape_content_dims(h_portrait_cell: int) -> Tuple[int, int]:
+    """Cellule horizontale a aire egale a la cellule verticale : dimensions
+    inversees (largeur <-> hauteur), puisque le ratio horizontal (3:2) est
+    exactement l'inverse du ratio vertical (2:3)."""
+    w_portrait_cell = int(round(RATIO_VIGNETTE * h_portrait_cell))
+    return h_portrait_cell, w_portrait_cell  # (largeur, hauteur) horizontale
+
+
+def evaluate_layout(W: int, H: int, n_landscape: int, h_p: int) -> dict:
+    """Pour une hauteur de cellule verticale h_p donnee : dimensionne le bloc
+    d'horizontales (aire egale) en bas, puis calcule la grille unique des
+    verticales dans le reste de la zone (trou pour le titre)."""
     title = compute_title_rect(W, H)
     area = Rect(
         MARGE_EXTERIEURE_PX,
@@ -151,149 +249,61 @@ def compute_zones(W: int, H: int) -> Tuple[Rect, Rect, Rect, Rect]:
         H - MARGE_EXTERIEURE_PX,
     )
 
-    top = intersect(Rect(area.x0, area.y0, area.x1, min(title.y0, area.y1)), area)
-    left = intersect(
-        Rect(
-            area.x0,
-            max(title.y0, area.y0),
-            max(title.x0, area.x0),
-            min(title.y1, area.y1),
-        ),
-        area,
-    )
-    right = intersect(
-        Rect(
-            min(title.x1, area.x1),
-            max(title.y0, area.y0),
-            area.x1,
-            min(title.y1, area.y1),
-        ),
-        area,
-    )
-    bottom = intersect(Rect(area.x0, max(title.y1, area.y0), area.x1, area.y1), area)
+    w_eff_p = int(round(RATIO_VIGNETTE * h_p)) + 2 * CADRE_BORDURE_PX
+    h_eff_p = h_p + 2 * CADRE_BORDURE_PX
 
-    return top, left, right, bottom
+    if n_landscape > 0:
+        w_land, h_land = landscape_content_dims(h_p)
+        w_eff_l = w_land + 2 * CADRE_BORDURE_PX
+        h_eff_l = h_land + 2 * CADRE_BORDURE_PX
+        cols_l = max(1, (area.w + GOUTTIERE_PX) // (w_eff_l + GOUTTIERE_PX))
+        rows_l = -(-n_landscape // cols_l)  # ceil
+        band_h = rows_l * (h_eff_l + GOUTTIERE_PX) - GOUTTIERE_PX
+        vert_area = Rect(area.x0, area.y0, area.x1, area.y1 - band_h - GOUTTIERE_PX)
+        band_area = Rect(area.x0, area.y1 - band_h, area.x1, area.y1)
+    else:
+        w_eff_l = h_eff_l = 0
+        vert_area = area
+        band_area = Rect(area.x0, area.y1, area.x1, area.y1)
 
+    vert_grid = build_grid_rows(vert_area, w_eff_p, h_eff_p, title)
+    land_grid = build_grid_rows(band_area, w_eff_l, h_eff_l, title) if n_landscape > 0 else []
 
-# =========================
-# 4) BINARY SEARCH HAUTEUR h
-# =========================
-
-
-def zone_capacity(rect: Rect, w_eff_cell: int, h_eff_cell: int) -> Tuple[int, int, int]:
-    if rect.w <= 0 or rect.h <= 0 or w_eff_cell <= 0 or h_eff_cell <= 0:
-        return 0, 0, 0
-    cols = max(0, (rect.w + GOUTTIERE_PX) // (w_eff_cell + GOUTTIERE_PX))
-    rows = max(0, (rect.h + GOUTTIERE_PX) // (h_eff_cell + GOUTTIERE_PX))
-    return cols, rows, cols * rows
+    return {
+        "h_p": h_p,
+        "w_eff_p": w_eff_p,
+        "h_eff_p": h_eff_p,
+        "w_eff_l": w_eff_l,
+        "h_eff_l": h_eff_l,
+        "vert_grid": vert_grid,
+        "vert_capacity": sum(len(row) for row in vert_grid),
+        "land_grid": land_grid,
+        "land_capacity": sum(len(row) for row in land_grid),
+    }
 
 
-def total_capacity(
-    W: int, H: int, h_cell: int
-) -> Tuple[int, Tuple[Tuple[int, int, int], ...]]:
-    w_cell = int(round(RATIO_VIGNETTE * h_cell))
-    w_eff_cell = w_cell + 2 * CADRE_BORDURE_PX
-    h_eff_cell = h_cell + 2 * CADRE_BORDURE_PX
-
-    top, left, right, bottom = compute_zones(W, H)
-    caps = (
-        zone_capacity(top, w_eff_cell, h_eff_cell),
-        zone_capacity(left, w_eff_cell, h_eff_cell),
-        zone_capacity(right, w_eff_cell, h_eff_cell),
-        zone_capacity(bottom, w_eff_cell, h_eff_cell),
-    )
-    total = sum(c for _, _, c in caps)
-    return total, caps
-
-
-def find_best_cell_height(
-    W: int, H: int, n_images: int
-) -> Tuple[int, Tuple[Tuple[int, int, int], ...]]:
-    h_min = CELL_HEIGHT_MIN_PX
-    top, left, right, bottom = compute_zones(W, H)
-    h_max_plausible = max(top.h, left.h, right.h, bottom.h)
-    h_max = max(h_min, h_max_plausible)
-
-    best_h = h_min
-    best_caps = ((0, 0, 0),) * 4
-
-    lo, hi = h_min, h_max
+def solve_layout(W: int, H: int, n_portrait: int, n_landscape: int) -> Optional[dict]:
+    """Cherche la plus grande hauteur de cellule verticale h_p telle que les
+    verticales tiennent dans la grille unique, une fois le bloc d'horizontales
+    reserve en bas. Recherche binaire : plus h_p est grand, plus les deux
+    blocs grossissent et moins il reste de place, donc la capacite verticale
+    decroit avec h_p. Retourne None si meme la hauteur minimale ne suffit."""
+    area_h = H - 2 * MARGE_EXTERIEURE_PX
+    lo, hi = CELL_HEIGHT_MIN_PX, area_h
+    best = None
     while lo <= hi:
         mid = (lo + hi) // 2
-        tot, caps = total_capacity(W, H, mid)
-        if tot >= n_images:
-            best_h, best_caps = mid, caps
+        result = evaluate_layout(W, H, n_landscape, mid)
+        if result["vert_capacity"] >= n_portrait and result["land_capacity"] >= n_landscape:
+            best = result
             lo = mid + 1
         else:
             hi = mid - 1
-    return best_h, best_caps
+    return best
 
 
 # =========================
-# 5) PLACEMENT DANS LES ZONES
-# =========================
-
-
-def compute_zone_positions(
-    rect: Rect, w_eff_cell: int, h_eff_cell: int, count: int
-) -> List[Tuple[int, int]]:
-    positions: List[Tuple[int, int]] = []
-    if rect.w <= 0 or rect.h <= 0 or count <= 0:
-        return positions
-
-    cols = max(0, (rect.w + GOUTTIERE_PX) // (w_eff_cell + GOUTTIERE_PX))
-    rows = max(0, (rect.h + GOUTTIERE_PX) // (h_eff_cell + GOUTTIERE_PX))
-    cap = cols * rows
-    if cols <= 0 or rows <= 0 or cap == 0:
-        return positions
-
-    n_to_place = min(count, cap)
-
-    # Nombre de lignes réellement nécessaires
-    full_rows, rem = divmod(n_to_place, cols)
-    used_rows = full_rows + (1 if rem > 0 else 0)
-
-    # Start x,y pour centrer avec gouttière standard
-    total_width = cols * w_eff_cell + (cols - 1) * GOUTTIERE_PX
-    total_height = used_rows * h_eff_cell + (used_rows - 1) * GOUTTIERE_PX
-    x_start = rect.x0 + max(0, (rect.w - total_width) // 2)
-    y_start = rect.y0 + max(0, (rect.h - total_height) // 2)
-
-    placed = 0
-    for row in range(used_rows):
-        if row < full_rows:
-            n_in_row = cols
-        else:
-            n_in_row = rem if rem > 0 else cols
-
-        # Justification horizontale si dernière ligne partielle
-        if row == used_rows - 1 and n_in_row < cols:
-            total_cells_w = n_in_row * w_eff_cell
-            n_spaces = max(1, n_in_row - 1)
-            gouttiere = max(GOUTTIERE_PX, (rect.w - total_cells_w) // n_spaces)
-            row_width = total_cells_w + (n_in_row - 1) * gouttiere
-            x_row = rect.x0 + max(0, (rect.w - row_width) // 2)
-        else:
-            gouttiere = GOUTTIERE_PX
-            row_width = cols * w_eff_cell + (cols - 1) * gouttiere
-            x_row = rect.x0 + max(0, (rect.w - row_width) // 2)
-
-        y = y_start + row * (h_eff_cell + GOUTTIERE_PX)
-        x = x_row
-        for _ in range(n_in_row):
-            positions.append((x, y))
-            placed += 1
-            if placed >= n_to_place:
-                break
-            x += w_eff_cell + gouttiere
-        if placed >= n_to_place:
-            break
-
-    return positions
-
-
-# =========================
-# 6) RENDU VIGNETTE (cadre collé à la photo)
+# 5) RENDU VIGNETTE (cadre collé à la photo)
 # =========================
 
 
@@ -308,13 +318,6 @@ def build_block_with_tight_frame(
     # Convertir si besoin
     if src.mode not in ("RGB", "RGBA"):
         src = src.convert("RGB")
-
-    # Pour limiter la RAM/IO, si JPEG on peut demander un décodage plus proche de la cible
-    try:
-        if hasattr(img, "format") and img.format == "JPEG":
-            img.draft("RGB", (w_cell, h_cell))
-    except Exception:
-        pass
 
     # Fit proportionnel dans (w_cell, h_cell)
     scale = min(w_cell / src.width, h_cell / src.height)
@@ -341,6 +344,29 @@ def build_block_with_tight_frame(
 
 
 # =========================
+# 6) PRÉPARATION EN PARALLÈLE
+# =========================
+
+
+def _prepare_block(job: Tuple[str, int, int]) -> Tuple[Optional[Image.Image], Optional[str]]:
+    """Ouvre une photo, applique draft() puis le redressement EXIF, et
+    construit son bloc. draft() doit voir l'image dans son etat JPEG natif :
+    appele avant exif_transpose(), il permet a Pillow de decoder directement
+    a une resolution proche de la cible au lieu de tout decoder puis reduire."""
+    img_path, w_cell, h_cell = job
+    try:
+        with Image.open(img_path) as im:
+            try:
+                im.draft("RGB", (w_cell, h_cell))
+            except Exception:
+                pass
+            im = ImageOps.exif_transpose(im)
+            return build_block_with_tight_frame(im, w_cell, h_cell), None
+    except Exception as e:
+        return None, str(e)
+
+
+# =========================
 # 7) EXPORT PRINCIPAL (streaming low-memory)
 # =========================
 
@@ -362,84 +388,62 @@ def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
     if not files_all:
         raise RuntimeError("Dossier vide ou introuvable.")
 
-    # Filtrer fichiers lisibles sans décoder entièrement
-    readable_paths: List[str] = []
-    bad_files: List[str] = []
-    for p in files_all:
-        if is_readable_image(p):
-            readable_paths.append(p)
-        else:
-            bad_files.append(os.path.basename(p))
-
-    N = len(readable_paths)
+    # Classer par lisibilite et orientation (un seul passage par fichier)
+    portrait_paths, landscape_paths, bad_files = classify_images(files_all)
+    N_portrait = len(portrait_paths)
+    N_landscape = len(landscape_paths)
+    N = N_portrait + N_landscape
     if N == 0:
         raise RuntimeError("Aucune image lisible dans le dossier.")
 
-    # Calcul taille de cellule (théorique 2:3) par binary search
-    h_cell, caps = find_best_cell_height(W, H, N)
-    w_cell = int(round(RATIO_VIGNETTE * h_cell))
-    w_eff_cell = w_cell + 2 * CADRE_BORDURE_PX
-    h_eff_cell = h_cell + 2 * CADRE_BORDURE_PX
-
-    # Zones et répartitions
-    top, left, right, bottom = compute_zones(W, H)
-    caps_values = [c for (_, _, c) in caps]
-
-    if sum(caps_values) < N:
-        max_capacity, _ = total_capacity(W, H, CELL_HEIGHT_MIN_PX)
+    layout = solve_layout(W, H, N_portrait, N_landscape)
+    if layout is None:
+        max_capacity = evaluate_layout(W, H, N_landscape, CELL_HEIGHT_MIN_PX)["vert_capacity"]
         raise RuntimeError(
             f"{N} photos ne tiennent pas dans le format {fmt_key} "
             f"(capacité maximale à hauteur de cellule minimale : {max_capacity}). "
             "Réduire le nombre de photos ou choisir un format plus grand."
         )
 
-    remaining = N
-    zone_counts = [0, 0, 0, 0]
-    for i in range(4):
-        take = min(remaining, caps_values[i])
-        zone_counts[i] = take
-        remaining -= take
+    w_eff_p, h_eff_p = layout["w_eff_p"], layout["h_eff_p"]
+    w_eff_l, h_eff_l = layout["w_eff_l"], layout["h_eff_l"]
+    w_cell_p, h_cell_p = w_eff_p - 2 * CADRE_BORDURE_PX, h_eff_p - 2 * CADRE_BORDURE_PX
+    w_cell_l, h_cell_l = landscape_content_dims(h_cell_p)
 
-    # Positions des cellules (positions du coin supérieur gauche de la *cellule*)
-    positions_top = compute_zone_positions(top, w_eff_cell, h_eff_cell, zone_counts[0])
-    positions_left = compute_zone_positions(
-        left, w_eff_cell, h_eff_cell, zone_counts[1]
-    )
-    positions_right = compute_zone_positions(
-        right, w_eff_cell, h_eff_cell, zone_counts[2]
-    )
-    positions_bottom = compute_zone_positions(
-        bottom, w_eff_cell, h_eff_cell, zone_counts[3]
-    )
-    all_cell_positions = (
-        positions_top + positions_left + positions_right + positions_bottom
-    )
+    positions_portrait = place_in_grid_rows(layout["vert_grid"], N_portrait, w_eff_p)
+    positions_landscape = place_in_grid_rows(layout["land_grid"], N_landscape, w_eff_l)
 
     # Canevas final (transparent)
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
 
-    # Boucle streaming : ouvrir -> transformer -> encadrer -> coller -> fermer
+    # Preparation en parallele (decodage/redimensionnement/cadre), collage
+    # sequentiel sur le canevas au fur et a mesure (paste n'est pas thread-safe)
     placed = 0
-    for img_path, cell_pos in zip(readable_paths, all_cell_positions):
-        try:
-            with Image.open(img_path) as im:
-                # Appliquer orientation EXIF juste avant usage
-                im = ImageOps.exif_transpose(im)
+    jobs = (
+        [(p, pos, w_cell_p, h_cell_p, w_eff_p, h_eff_p) for p, pos in zip(portrait_paths, positions_portrait)]
+        + [(p, pos, w_cell_l, h_cell_l, w_eff_l, h_eff_l) for p, pos in zip(landscape_paths, positions_landscape)]
+    )
+    with cf.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        future_to_job = {
+            executor.submit(_prepare_block, (img_path, w_cell, h_cell)): (img_path, cell_pos, w_eff_cell, h_eff_cell)
+            for img_path, cell_pos, w_cell, h_cell, w_eff_cell, h_eff_cell in jobs
+        }
+        for future in cf.as_completed(future_to_job):
+            img_path, cell_pos, w_eff_cell, h_eff_cell = future_to_job[future]
+            block, _error = future.result()
+            if block is None:
+                bad_files.append(os.path.basename(img_path))
+                continue
 
-                # Construire le bloc (image redimensionnée + cadre collé)
-                block = build_block_with_tight_frame(im, w_cell, h_cell)
+            # Centrer le bloc dans la cellule (w_eff_cell x h_eff_cell)
+            bx, by = block.size
+            cx, cy = cell_pos
+            x = cx + max(0, (w_eff_cell - bx) // 2)
+            y = cy + max(0, (h_eff_cell - by) // 2)
 
-                # Centrer le bloc dans la cellule (w_eff_cell x h_eff_cell)
-                bx, by = block.size
-                cx, cy = cell_pos
-                x = cx + max(0, (w_eff_cell - bx) // 2)
-                y = cy + max(0, (h_eff_cell - by) // 2)
-
-                # Collage: utiliser paste avec masque alpha (économe en RAM)
-                canvas.paste(block, (x, y), block)
-                placed += 1
-        except Exception:
-            bad_files.append(os.path.basename(img_path))
+            # Collage: utiliser paste avec masque alpha (économe en RAM)
+            canvas.paste(block, (x, y), block)
+            placed += 1
 
     # Export PNG 300 DPI (sans optimize pour la vitesse)
     parent = os.path.basename(os.path.dirname(os.path.abspath(folder))) or "export"
@@ -455,10 +459,14 @@ def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
         f"Export: {out_path}\n"
         f"Format: {W}×{H}px @ {DPI} DPI\n"
         f"Images placées: {placed} (ignorées: {len(bad_files)})\n"
-        f"Cellule 2:3 (hors cadre): {h_cell}×{w_cell}px (h×w)\n"
-        f"Cellule 2:3 (avec cadre): {h_eff_cell}×{w_eff_cell}px (h×w)\n"
-        f"Bloc moyen ≈ image redimensionnée + cadre (centré dans la cellule)"
+        f"Verticales: {N_portrait} — cellule {h_cell_p}×{w_cell_p}px (h×w), avec cadre {h_eff_p}×{w_eff_p}px\n"
     )
+    if N_landscape > 0:
+        summary += (
+            f"Horizontales: {N_landscape} (regroupées en fin de trombi) — "
+            f"cellule {h_cell_l}×{w_cell_l}px (h×w), avec cadre {h_eff_l}×{w_eff_l}px\n"
+        )
+    summary += "Bloc moyen ≈ image redimensionnée + cadre (centré dans la cellule)"
 
     if bad_files:
         summary += "\nFichiers ignorés: " + ", ".join(bad_files[:10])
@@ -479,7 +487,7 @@ def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Trombi École V0.2")
+        root.title("Trombi École V1.0")
         root.geometry("520x220")
 
         self.folder_var = tk.StringVar()

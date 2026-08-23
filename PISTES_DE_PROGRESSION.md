@@ -151,6 +151,10 @@ Résultat : haut, gauche et droite tassés au maximum, et la zone du bas avec le
 l'allure du tirage final. À discuter avant d'écrire du code : veut-on équilibrer
 la charge entre les 4 zones ?
 
+**Tranché le 23/08/2026 : remplacé, pas juste rééquilibré.** Voir la section
+« Refonte validée le 23/08/2026 » plus bas — les 4 zones indépendantes
+disparaissent au profit d'une grille unique à pas constant.
+
 ## 🟡 6. L'optimisation JPEG `draft()` ne se déclenche jamais
 
 **`Trombi_ecole.py:301`**
@@ -170,8 +174,27 @@ format après exif_transpose : None
 
 L'accélération du décodage JPEG que le code croit appliquer est du code mort.
 
-**Piste :** appeler `draft()` sur l'image d'origine, **avant** `exif_transpose`,
-ou mémoriser le format avant la copie.
+**Corrigé le 23/08/2026.** `draft()` est maintenant appelé sur l'image
+d'origine dans `_prepare_block()`, **avant** `exif_transpose()` — et le
+traitement de chaque photo (décodage, redimensionnement, accentuation, cadre)
+tourne en parallèle sur CPU-1 threads (`ThreadPoolExecutor`, même motif que
+`photokit.core`), le collage sur le canevas restant séquentiel.
+
+**Mesuré, comparé à la version committée avant la correction** (320 photos
+JPEG 6000×4000px, un format d'appareil photo réaliste) :
+
+| Version | Temps |
+|---|---|
+| Avant (commit `5ace0bf`) | 47,2 s |
+| `draft()` corrigé, mono-thread | ~9× plus rapide (mesuré sur un jeu de 150 photos : 22,1 s → 1,9 s) |
+| `draft()` + multithread (CPU-1) | **2,2 s (~21× plus rapide)** |
+
+Note technique posée par ce même bug dans `photokit.core` (même cause,
+codebase différente) : voir
+`D:\Dev\AutoFlux_Projects\photokit_v1.0.0\PISTES_DE_PROGRESSION.md`. Décision
+du 23/08/2026 : ne pas relier les deux projets pour autant — Trombi_ecole
+reste indépendant (voir la règle « aucune dépendance entre projets » du
+`CLAUDE.md` racine).
 
 ## 🟡 7. L'interface gèle sans aucun retour
 
@@ -183,6 +206,13 @@ est planté.
 
 **Piste :** générer dans un thread et remonter l'avancement, ou au minimum
 afficher « photo n / N » via `update_idletasks()`.
+
+**Toujours vrai après le 23/08/2026, mais moins grave.** Le traitement des
+photos tourne déjà en parallèle en interne (voir §6) — le gel de l'interface
+dure maintenant quelques secondes au lieu de dizaines de secondes sur un
+trombi d'école entière. Le fond du problème (aucun retour visuel pendant ce
+temps, aucun moyen de distinguer un calcul en cours d'un plantage) reste
+entier pour les très gros trombis (formats 50×70, centaines de photos).
 
 ## 🟡 8. Code mort et incohérences cosmétiques
 
@@ -216,6 +246,42 @@ moins : la somme des capacités des 4 zones, la non-régression du tri naturel s
 les noms `0000.jpg` / `0103_ard.jpg`, et le fait qu'on place bien **toutes** les
 photos demandées (ce qui attraperait le point §4a).
 
+## Refonte validée le 23/08/2026 — le template « classique »
+
+Discutée avec Thierry via plusieurs maquettes (rendues en rectangles, sans
+vraies photos, pour juger uniquement l'espacement). Décidée, pas encore codée.
+Répond au §5 (répartition déséquilibrée) et à un défaut non documenté avant
+aujourd'hui : les photos horizontales (jusqu'à 20% du total selon les écoles)
+cassaient le rythme visuel, forcées dans la même cellule 2:3 que les
+verticales.
+
+**Ce que ce template remplace, pour toutes les écoles (pas seulement le
+thème dinosaure ci-dessous) — en particulier utile pour les collèges/lycées,
+plus sujets aux photos horizontales :**
+
+1. **Grille unique à pas constant**, au lieu de 4 zones indépendantes
+   (haut/gauche/droite/bas) centrées chacune de son côté. Une seule grille
+   couvre toute la zone imprimable, en sautant les cellules qui chevauchent
+   le rectangle du titre. Élimine l'écart irrégulier entre zones et
+   l'absence d'alignement des colonnes de part et d'autre du titre.
+2. **Dernière ligne partielle centrée, jamais étirée.** Le pas entre photos
+   reste identique à toutes les lignes ; s'il manque des photos pour remplir
+   la dernière ligne, l'espace en trop va à gauche/droite du groupe, pas
+   entre les photos.
+3. **Photos horizontales détectées et regroupées en fin de trombi**, sur un
+   ou plusieurs rangs dédiés après toutes les verticales (ordre numérique
+   conservé à l'intérieur de chaque groupe). Dimensionnées à **aire égale**
+   avec les cellules verticales (dimensions inversées : largeur horizontale
+   = hauteur verticale, hauteur horizontale = largeur verticale) — testé
+   contre l'option « même hauteur de rangée », écartée car elle grossit
+   artificiellement les horizontales (~2,25× la surface) et leur donne une
+   importance visuelle non voulue.
+
+**Pas encore réglé avant de coder :** le point §6 (optimisation JPEG `draft()`
+morte) et l'absence de multithread restent des sujets séparés, discutés le
+même jour mais pas résolus — voir le fil de discussion, pas encore de piste
+écrite ici.
+
 ## Idées notées le 23/08/2026, écartées pour cette session
 
 Discutées avec Thierry, volontairement pas traitées maintenant.
@@ -235,6 +301,21 @@ AutoIndiv écrit (ou écrira) un `multivisage.json` qui pourrait servir, en
 plus de `trombi_keep.txt`, à exclure automatiquement les photos où plusieurs
 visages sont détectés (fratries). **Idée pour plus tard**, pas cadrée, pas de
 format ni d'emplacement de fichier discutés.
+
+### Un second template « thème » : le dinosaure qui prend la fuite
+
+Thème de la saison 2026 pour une école en particulier : le dinosaure (image
+de fond) entouré par les photos des élèves, mais avec une **voie de sortie**
+pour lui — l'idée visuelle est que la « force collective » des enfants le
+fait fuir, sans l'encercler complètement. Une maquette d'encerclement complet
+(anneau simple vs plusieurs anneaux concentriques) a été testée le 23/08/2026
+pour vérifier la faisabilité géométrique — un anneau (ou plusieurs, répartis
+proportionnellement à leur circonférence) autour d'un trou elliptique, calculé
+par points à intervalle d'arc égal (pas par angle égal, qui chevauche les
+vignettes sur une ellipse). **Mais ce n'est pas la mise en page voulue** :
+Thierry fournira sa propre maquette de la scène avec la voie de sortie quand
+ce template sera à l'ordre du jour. Traité comme un **second template**,
+distinct du « classique » — voir la conclusion du 23/08/2026 plus bas.
 
 ## Ordre d'attaque recommandé
 

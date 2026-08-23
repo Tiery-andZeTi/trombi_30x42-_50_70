@@ -9,6 +9,7 @@ L’application dispose d’une interface graphique réalisée avec Tkinter, en 
 - Interface graphique simple pour choisir les dossiers et options.
 - Possibilité d’ignorer certaines photos indésirables via le fichier `trombi_keep.txt`.
 - Photos d’entrée acceptées : JPG uniquement (le PNG est réservé à la sortie).
+- Photos horizontales détectées automatiquement et regroupées sur leur(s) propre(s) rang(s) en fin de trombi, pour ne pas casser le rythme visuel de la grille.
 
 ## Installation et prérequis (version Python)
 
@@ -23,7 +24,7 @@ python Trombi_ecole.py
 
 ## Utilisation pas à pas
 
-1. Lancer le programme (ou double-cliquer sur `Trombi_Ecole_V05.exe` sous Windows).
+1. Lancer le programme (ou double-cliquer sur `Trombi_Ecole_V1.0.exe` sous Windows).
 2. Choisir le dossier contenant les photos des élèves.
 3. Choisir le format du trombinoscope (30x42 ou 50x70).
 4. Générer le trombinoscope et vérifier le résultat dans le dossier de sortie.
@@ -31,7 +32,7 @@ python Trombi_ecole.py
 ## Fichiers importants
 
 - `Trombi_ecole.py` : script Python principal.
-- `Trombi_Ecole_V05.exe` : version exécutable pour Windows.
+- `Trombi_Ecole_V1.0.exe` : version exécutable pour Windows.
 - `trombi_keep.txt` (optionnel) : liste les photos à **inclure** dans le trombi, une par ligne, avec le nom exact du fichier et son extension. Sert notamment à exclure automatiquement les ardoises. Si le fichier est absent, toutes les photos du dossier sont utilisées.  
   Exemple :
   - `0001.jpg`
