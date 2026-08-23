@@ -317,6 +317,16 @@ Thierry fournira sa propre maquette de la scène avec la voie de sortie quand
 ce template sera à l'ordre du jour. Traité comme un **second template**,
 distinct du « classique » — voir la conclusion du 23/08/2026 plus bas.
 
+**Question posée le 23/08/2026 : une appli séparée, ou un bouton dans la
+même appli ?** Réponse technique : **le bouton dans la même appli est plus
+simple**, et c'est en partie un effet du refactor du jour — la mise en page
+(grille, positions) est déjà séparée du traitement par photo (décodage,
+`draft()`, redimensionnement, cadre, multithread). Le dino ne serait qu'une
+deuxième fonction de mise en page branchée sur le même moteur de traitement.
+Une appli séparée dupliquerait tout le reste (lecture dossier, `trombi_keep`,
+export, erreurs) — deux endroits à corriger au moindre bug. Pas encore
+tranché, juste noté comme piste technique.
+
 ## Ordre d'attaque recommandé
 
 **Avant la saison** — moins d'une heure :
