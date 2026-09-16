@@ -10,6 +10,13 @@ L’application dispose d’une interface graphique réalisée avec Tkinter, en 
 
 - Génération de trombinoscopes en 30x42 cm ou 50x70 cm.
 - Interface graphique simple pour choisir les dossiers et options.
+- Case à cocher pour incruster le nom (nom du fichier, sans l'extension) sous
+  chaque vignette — pensée pour des photos déjà nommées « Nom Prénom »,
+  comme celles produites par NéoTrombino.
+- Case à cocher pour traiter un dossier contenant un sous-dossier par classe
+  (structure produite par NéoTrombino) : toutes les classes sont alors
+  fusionnées en **un seul grand trombi**, dans l'ordre alphabétique des noms
+  de sous-dossiers, sans les mélanger entre elles.
 - Possibilité d’ignorer certaines photos indésirables via le fichier `trombi_keep.txt`.
 - Photos d’entrée acceptées : JPG uniquement (le PNG est réservé à la sortie).
 - Photos horizontales détectées automatiquement et regroupées sur leur(s) propre(s) rang(s) en fin de trombi, pour ne pas casser le rythme visuel de la grille.
@@ -25,13 +32,27 @@ Pour lancer le programme :
 
 python Trombi_ecole.py
 
+En ligne de commande (sans interface), deux options facultatives s'ajoutent
+après le format :
+
+python Trombi_ecole.py "C:\Photos\Ecole" 42x30 --nom --classes
+
+- `--nom` : incruste le nom du fichier sous chaque photo.
+- `--classes` : traite le dossier passé en argument comme un dossier
+  d'école contenant un sous-dossier par classe, et fabrique un seul grand
+  trombi fusionné.
+
 
 ## Utilisation pas à pas
 
 1. Lancer le programme (ou double-cliquer sur `Trombi_Ecole_V1.0.exe` sous Windows).
-2. Choisir le dossier contenant les photos des élèves.
+2. Choisir le dossier contenant les photos des élèves (ou, si la case
+   « sous-dossiers de classes » est cochée, le dossier de l'école contenant
+   un sous-dossier par classe).
 3. Choisir le format du trombinoscope dans le menu déroulant : `42x30` (30x42 cm) ou `70x50` (50x70 cm).
-4. Générer le trombinoscope et vérifier le résultat dans le dossier de sortie.
+4. Cocher, si besoin, « Écrire le nom sous chaque photo » et/ou « Ce dossier
+   contient des sous-dossiers de classes ».
+5. Générer le trombinoscope et vérifier le résultat dans le dossier de sortie.
 
 > Note : le menu déroulant affiche les formats en pixels dans l'ordre largeur × hauteur
 > (`42x30`, `70x50`), alors que le nom du produit se lit habituellement en hauteur × largeur
@@ -50,7 +71,13 @@ python Trombi_ecole.py
   - `0001.jpg`
   - `0005.JPG`
 
-> Remarque : ce fichier est généré automatiquement par AutoIndiv.
+  En mode « sous-dossiers de classes », le fichier est cherché **dans chaque
+  dossier de classe séparément** : il n'écarte que les photos de cette
+  classe-là.
+
+> Remarque : ce fichier est généré automatiquement par AutoIndiv, pour le
+> dossier envoyé au labo. Le dossier « sortie école » produit par NéoTrombino
+> ne passe pas par AutoIndiv et n'en a donc pas aujourd'hui.
 
 ## Fabriquer l'exécutable (PyInstaller)
 

@@ -32,11 +32,26 @@ Aucune installation n'est nécessaire : il suffit d'avoir le fichier
    (Le menu affiche les formats en largeur × hauteur ; le nom commercial se
    lit en hauteur × largeur — c'est le même format dans les deux cas.)
 
-4. Cliquez sur **Générer**.
+4. Deux cases à cocher, toutes deux facultatives :
 
-5. Une fenêtre **Succès** apparaît avec un résumé (nombre de photos placées,
-   taille des vignettes...). Le fichier PNG a été créé **dans le même
-   dossier que les photos**, sous un nom du type `trombi_42x30_NomDuDossier.png`.
+   - **« Écrire le nom (nom du fichier) sous chaque photo »** : incruste le
+     nom du fichier (sans son extension) sur chaque vignette. Ne cochez ceci
+     que si vos photos sont déjà nommées « Nom Prénom » — c'est ce que fait
+     NéoTrombino par défaut à l'export vers l'établissement.
+   - **« Ce dossier contient des sous-dossiers de classes »** : à cocher
+     quand le dossier choisi à l'étape 2 est le dossier de l'école, avec un
+     sous-dossier par classe à l'intérieur (exactement ce que produit
+     NéoTrombino). Le programme fabrique alors **un seul et même grand
+     trombi** avec toutes les classes, prises dans l'**ordre alphabétique**
+     de leur nom de dossier, sans les mélanger entre elles.
+
+5. Cliquez sur **Générer**.
+
+6. Une fenêtre **Succès** apparaît avec un résumé (nombre de photos placées,
+   taille des vignettes, et le détail classe par classe si la case
+   « sous-dossiers de classes » était cochée). Le fichier PNG a été créé
+   **dans le dossier choisi à l'étape 2**, sous un nom du type
+   `trombi_42x30_NomDuDossier.png`.
 
 
 
@@ -60,6 +75,13 @@ raison en clair. Les cas les plus courants :
 - **« Aucune image lisible dans le dossier »** : les photos JPG trouvées
   sont illisibles (fichiers corrompus), ou `trombi_keep.txt` les a toutes
   écartées.
+- **« Aucun sous-dossier de classe trouvé dans ce dossier »** : la case
+  « sous-dossiers de classes » est cochée, mais le dossier choisi contient
+  directement des photos et non des sous-dossiers — décochez la case, ou
+  choisissez le dossier parent (celui qui contient les dossiers de classe).
+- **« Aucune photo trouvée dans les sous-dossiers de classes »** : les
+  sous-dossiers existent mais sont vides, ou `trombi_keep.txt` a tout écarté
+  dans chacun d'eux.
 
 ## Bon à savoir
 
@@ -72,3 +94,14 @@ raison en clair. Les cas les plus courants :
 - Relancer le programme sur un dossier où un trombi a déjà été généré ne
   pose aucun problème : le PNG déjà créé n'est jamais repris comme une photo
   d'élève.
+- En mode « sous-dossiers de classes », un `trombi_keep.txt` s'applique à
+  l'intérieur du dossier de classe où il se trouve — il n'écarte que les
+  photos de cette classe-là, pas celles des autres.
+- Le nom écrit sur chaque photo est exactement le nom du fichier, sans
+  l'extension. S'il est trop long pour tenir sur une vignette : d'abord il
+  est affiché en plus petit ; si ça ne suffit toujours pas, le prénom est
+  retiré pour ne garder que le NOM ; et si même le nom seul ne tient pas, il
+  est coupé au nombre de caractères qui rentre, **sans points de
+  suspension** (volontairement — trois petits points sur un nom déjà long,
+  souvent un nom d'origine étrangère, ça peut vite devenir un sobriquet
+  moqueur dans une cour d'école).

@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 try:
     import tkinter as tk
@@ -29,6 +29,13 @@ RATIO_VIGNETTE = 2 / 3  # w / h (cellule théorique 2:3, sans crop)
 CADRE_BORDURE_PX = 6
 CADRE_COULEUR = "black"
 DPI = 300
+
+# Nom incruste sous chaque photo (optionnel, case a cocher dans l'UI)
+NAME_BAND_HEIGHT_RATIO = 0.14  # hauteur du bandeau = 14% de la hauteur de la photo
+NAME_BAND_ALPHA = 160  # opacite du bandeau noir (0-255)
+NAME_FONT_NAME = "arial.ttf"
+NAME_MIN_FONT_PX = 10
+NAME_TEXT_SIDE_PADDING_RATIO = 0.06
 
 # Zone-titre (proportionnelle)
 TITLE_LEFT_PCT = 0.22
@@ -307,8 +314,89 @@ def solve_layout(W: int, H: int, n_portrait: int, n_landscape: int) -> Optional[
 # =========================
 
 
+def _fit_font(text: str, max_w: int, max_h: int):
+    """Plus grande taille d'Arial (entre NAME_MIN_FONT_PX et max_h) qui tient
+    dans max_w. Se rabat sur la police par défaut si Arial est introuvable."""
+    size = max_h
+    smallest_tried = None
+    while size >= NAME_MIN_FONT_PX:
+        try:
+            candidate = ImageFont.truetype(NAME_FONT_NAME, size)
+        except Exception:
+            return ImageFont.load_default()
+        bbox = candidate.getbbox(text)
+        if bbox[2] - bbox[0] <= max_w:
+            return candidate
+        smallest_tried = candidate
+        size -= 1
+    return smallest_tried or ImageFont.load_default()
+
+
+def _is_name_upper(token: str) -> bool:
+    """Un mot est considere comme le NOM (pas le prenom) s'il est ecrit tout
+    en majuscules -- la convention par defaut de NeoTrombino ("[Nom] [Prenom]",
+    NOM en MAJUSCULES, Prenom avec une majuscule par partie)."""
+    letters = [c for c in token if c.isalpha()]
+    return bool(letters) and all(c.isupper() for c in letters)
+
+
+def _family_name_only(name: str) -> str:
+    """Ne garde que les mots tout en majuscules (le NOM), dans leur ordre
+    d'origine. Retourne une chaine vide si aucun mot ne s'y prete."""
+    return " ".join(t for t in name.split(" ") if _is_name_upper(t))
+
+
+def _hard_cut(draw: "ImageDraw.ImageDraw", text: str, font, max_w: int) -> str:
+    """Coupe le texte au nombre de caracteres qui rentre, SANS points de
+    suspension : un nom coupe en "..." peut devenir un sobriquet moqueur,
+    surtout pour un nom d'origine etrangere plus long que la moyenne."""
+    truncated = text
+    while truncated and draw.textbbox((0, 0), truncated, font=font)[2] > max_w:
+        truncated = truncated[:-1]
+    return truncated
+
+
+def add_name_band(img: Image.Image, name: str) -> Image.Image:
+    """Incruste le nom sur un bandeau semi-transparent collé au bas de la
+    photo, sans changer la taille de l'image (la cellule ne bouge pas).
+
+    Si le nom complet ne tient pas, meme en reduisant la police au minimum,
+    on enleve d'abord le prenom (on garde le NOM) plutot que de couper le
+    texte -- et seulement si meme le nom seul ne tient pas, on coupe au
+    nombre de caracteres qui rentre, sans "..."."""
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    w, h = img.size
+    band_h = max(1, int(round(h * NAME_BAND_HEIGHT_RATIO)))
+    overlay = Image.new("RGBA", (w, band_h), (0, 0, 0, NAME_BAND_ALPHA))
+    img.paste(overlay, (0, h - band_h), overlay)
+
+    pad_x = int(round(w * NAME_TEXT_SIDE_PADDING_RATIO))
+    max_text_w = max(1, w - 2 * pad_x)
+    max_font_px = max(NAME_MIN_FONT_PX, int(round(band_h * 0.6)))
+
+    draw = ImageDraw.Draw(img)
+
+    display_name = name
+    font = _fit_font(display_name, max_text_w, max_font_px)
+    if draw.textbbox((0, 0), display_name, font=font)[2] > max_text_w:
+        nom_seul = _family_name_only(name)
+        if nom_seul and nom_seul != name:
+            display_name = nom_seul
+            font = _fit_font(display_name, max_text_w, max_font_px)
+        if draw.textbbox((0, 0), display_name, font=font)[2] > max_text_w:
+            display_name = _hard_cut(draw, display_name, font, max_text_w)
+
+    bbox = draw.textbbox((0, 0), display_name, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    tx = (w - tw) / 2 - bbox[0]
+    ty = h - band_h + (band_h - th) / 2 - bbox[1]
+    draw.text((tx, ty), display_name, fill=(255, 255, 255), font=font)
+    return img
+
+
 def build_block_with_tight_frame(
-    img: Image.Image, w_cell: int, h_cell: int
+    img: Image.Image, w_cell: int, h_cell: int, name: Optional[str] = None
 ) -> Image.Image:
     """
     Crée un bloc (image redimensionnée + cadre noir collé à l'image) sans remplir la cellule 2:3.
@@ -333,6 +421,10 @@ def build_block_with_tight_frame(
         )
     )
 
+    # Nom incruste avant le cadre, pour qu'il reste a l'interieur du contour noir
+    if name:
+        resized = add_name_band(resized, name)
+
     # Ajouter cadre noir collé à l'image (autour du contenu)
     block = ImageOps.expand(resized, border=CADRE_BORDURE_PX, fill=CADRE_COULEUR)
 
@@ -348,12 +440,14 @@ def build_block_with_tight_frame(
 # =========================
 
 
-def _prepare_block(job: Tuple[str, int, int]) -> Tuple[Optional[Image.Image], Optional[str]]:
+def _prepare_block(
+    job: Tuple[str, int, int, Optional[str]]
+) -> Tuple[Optional[Image.Image], Optional[str]]:
     """Ouvre une photo, applique draft() puis le redressement EXIF, et
     construit son bloc. draft() doit voir l'image dans son etat JPEG natif :
     appele avant exif_transpose(), il permet a Pillow de decoder directement
     a une resolution proche de la cible au lieu de tout decoder puis reduire."""
-    img_path, w_cell, h_cell = job
+    img_path, w_cell, h_cell, name = job
     try:
         with Image.open(img_path) as im:
             try:
@@ -361,7 +455,7 @@ def _prepare_block(job: Tuple[str, int, int]) -> Tuple[Optional[Image.Image], Op
             except Exception:
                 pass
             im = ImageOps.exif_transpose(im)
-            return build_block_with_tight_frame(im, w_cell, h_cell), None
+            return build_block_with_tight_frame(im, w_cell, h_cell, name), None
     except Exception as e:
         return None, str(e)
 
@@ -371,19 +465,40 @@ def _prepare_block(job: Tuple[str, int, int]) -> Tuple[Optional[Image.Image], Op
 # =========================
 
 
-def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
+def _list_and_filter(folder: str) -> Tuple[List[str], int, bool]:
+    """Liste les JPG d'un dossier et applique trombi_keep.txt s'il existe.
+    Retourne (fichiers gardés, nombre exclus, trombi_keep.txt présent ?)."""
+    files = list_images_non_recursive(folder)
+    keep_names = read_trombi_keep(folder)
+    if keep_names is None:
+        return files, 0, False
+    before = len(files)
+    files = [p for p in files if os.path.basename(p) in keep_names]
+    return files, before - len(files), True
+
+
+def export_trombi(
+    folder: str,
+    fmt_key: str,
+    console_mode: bool = False,
+    write_name: bool = False,
+    files_override: Optional[List[str]] = None,
+    out_name_label: Optional[str] = None,
+    extra_header: Optional[str] = None,
+) -> str:
     if fmt_key not in FORMATS_PX:
         raise ValueError(f"Format inconnu: {fmt_key}")
 
     W, H = FORMATS_PX[fmt_key]
-    files_all = list_images_non_recursive(folder)
 
-    keep_names = read_trombi_keep(folder)
-    excluded_by_keep = 0
-    if keep_names is not None:
-        before = len(files_all)
-        files_all = [p for p in files_all if os.path.basename(p) in keep_names]
-        excluded_by_keep = before - len(files_all)
+    if files_override is not None:
+        # Mode "sous-dossiers de classes" : la liste (deja filtree classe par
+        # classe par l'appelant) et le resume trombi_keep.txt sont deja prets.
+        files_all = files_override
+        excluded_by_keep = 0
+        keep_present = False
+    else:
+        files_all, excluded_by_keep, keep_present = _list_and_filter(folder)
 
     if not files_all:
         raise RuntimeError("Dossier vide ou introuvable.")
@@ -419,14 +534,18 @@ def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
     # Preparation en parallele (decodage/redimensionnement/cadre), collage
     # sequentiel sur le canevas au fur et a mesure (paste n'est pas thread-safe)
     placed = 0
+
+    def _name_of(path: str) -> Optional[str]:
+        return os.path.splitext(os.path.basename(path))[0] if write_name else None
+
     jobs = (
-        [(p, pos, w_cell_p, h_cell_p, w_eff_p, h_eff_p) for p, pos in zip(portrait_paths, positions_portrait)]
-        + [(p, pos, w_cell_l, h_cell_l, w_eff_l, h_eff_l) for p, pos in zip(landscape_paths, positions_landscape)]
+        [(p, pos, w_cell_p, h_cell_p, w_eff_p, h_eff_p, _name_of(p)) for p, pos in zip(portrait_paths, positions_portrait)]
+        + [(p, pos, w_cell_l, h_cell_l, w_eff_l, h_eff_l, _name_of(p)) for p, pos in zip(landscape_paths, positions_landscape)]
     )
     with cf.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         future_to_job = {
-            executor.submit(_prepare_block, (img_path, w_cell, h_cell)): (img_path, cell_pos, w_eff_cell, h_eff_cell)
-            for img_path, cell_pos, w_cell, h_cell, w_eff_cell, h_eff_cell in jobs
+            executor.submit(_prepare_block, (img_path, w_cell, h_cell, name)): (img_path, cell_pos, w_eff_cell, h_eff_cell)
+            for img_path, cell_pos, w_cell, h_cell, w_eff_cell, h_eff_cell, name in jobs
         }
         for future in cf.as_completed(future_to_job):
             img_path, cell_pos, w_eff_cell, h_eff_cell = future_to_job[future]
@@ -446,8 +565,11 @@ def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
             placed += 1
 
     # Export PNG 300 DPI (sans optimize pour la vitesse)
-    parent = os.path.basename(os.path.dirname(os.path.abspath(folder))) or "export"
-    out_name = f"trombi_{fmt_key}_{parent}.png"
+    if out_name_label is not None:
+        label = out_name_label
+    else:
+        label = os.path.basename(os.path.dirname(os.path.abspath(folder))) or "export"
+    out_name = f"trombi_{fmt_key}_{label}.png"
     out_path = os.path.join(folder, out_name)
     try:
         # compress_level: 0 (rapide, gros fichier) -> 9 (lent, petit). Choix médian 6.
@@ -473,10 +595,60 @@ def export_trombi(folder: str, fmt_key: str, console_mode: bool = False) -> str:
         if len(bad_files) > 10:
             summary += f" … (+{len(bad_files) - 10})"
 
-    if keep_names is not None:
+    if keep_present:
         summary += f"\ntrombi_keep.txt détecté : {excluded_by_keep} photo(s) exclue(s) (hors liste, ex. ardoises)"
 
+    if extra_header:
+        summary = extra_header + "\n\n" + summary
+
     return summary
+
+
+def export_trombi_classes(school_folder: str, fmt_key: str, write_name: bool = False) -> str:
+    """Regroupe TOUTES les photos de TOUS les sous-dossiers de classes en un
+    seul grand trombi pour l'ecole entiere. Les classes sont prises dans
+    l'ordre alphabetique de leur nom de sous-dossier, sans les melanger entre
+    elles (a l'interieur d'une classe, l'ordre des fichiers est conserve)."""
+    try:
+        entries = [
+            e for e in os.listdir(school_folder)
+            if os.path.isdir(os.path.join(school_folder, e))
+        ]
+    except FileNotFoundError:
+        entries = []
+    entries.sort(key=natural_sort_key)
+
+    if not entries:
+        raise RuntimeError("Aucun sous-dossier de classe trouvé dans ce dossier.")
+
+    combined_files: List[str] = []
+    per_class_lines: List[str] = []
+    for entry in entries:
+        subfolder = os.path.join(school_folder, entry)
+        files, excluded, keep_present = _list_and_filter(subfolder)
+        combined_files.extend(files)
+        line = f"{entry} : {len(files)} photo(s)"
+        if keep_present:
+            line += f" ({excluded} exclue(s) par trombi_keep.txt)"
+        per_class_lines.append(line)
+
+    if not combined_files:
+        raise RuntimeError("Aucune photo trouvée dans les sous-dossiers de classes.")
+
+    label = os.path.basename(os.path.normpath(school_folder)) or "export"
+    header = (
+        f"Classes traitées ({len(entries)}), dans l'ordre alphabétique :\n"
+        + "\n".join(f"  - {line}" for line in per_class_lines)
+    )
+
+    return export_trombi(
+        school_folder,
+        fmt_key,
+        write_name=write_name,
+        files_override=combined_files,
+        out_name_label=label,
+        extra_header=header,
+    )
 
 
 # =========================
@@ -488,11 +660,13 @@ class App:
     def __init__(self, root):
         self.root = root
         root.title("Trombi École V1.0")
-        root.geometry("520x220")
+        root.geometry("520x280")
 
         self.folder_var = tk.StringVar()
         self.format_var = tk.StringVar(value="42x30")
         self.progress_var = tk.StringVar(value="Prêt.")
+        self.write_name_var = tk.BooleanVar(value=False)
+        self.classes_var = tk.BooleanVar(value=False)
 
         frm = tk.Frame(root, padx=10, pady=10)
         frm.pack(fill=tk.BOTH, expand=True)
@@ -511,6 +685,20 @@ class App:
         tk.OptionMenu(frm, self.format_var, *FORMATS_PX.keys()).grid(
             row=row, column=1, sticky="w", pady=(8, 0)
         )
+        row += 1
+
+        tk.Checkbutton(
+            frm,
+            text="Écrire le nom (nom du fichier) sous chaque photo",
+            variable=self.write_name_var,
+        ).grid(row=row, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        row += 1
+
+        tk.Checkbutton(
+            frm,
+            text="Ce dossier contient des sous-dossiers de classes (un seul grand trombi)",
+            variable=self.classes_var,
+        ).grid(row=row, column=0, columnspan=3, sticky="w")
         row += 1
 
         tk.Button(frm, text="Générer", command=self.on_generate, width=18).grid(
@@ -533,10 +721,15 @@ class App:
             messagebox.showerror("Erreur", "Veuillez sélectionner un dossier d’images.")
             return
         fmt = self.format_var.get()
+        write_name = self.write_name_var.get()
+        classes_mode = self.classes_var.get()
         try:
             self.progress_var.set("Calcul en cours…")
             self.root.update_idletasks()
-            summary = export_trombi(folder, fmt, console_mode=False)
+            if classes_mode:
+                summary = export_trombi_classes(folder, fmt, write_name=write_name)
+            else:
+                summary = export_trombi(folder, fmt, write_name=write_name, console_mode=False)
             self.progress_var.set("Terminé.")
             messagebox.showinfo("Succès", summary)
         except Exception as e:
@@ -550,12 +743,18 @@ class App:
 
 
 def main(argv: List[str]) -> int:
-    # Usage console: py Trombi_Ecole.py "C:\\Photos\\JY403\\indiv" 42x30
+    # Usage console: py Trombi_Ecole.py "C:\\Photos\\JY403\\indiv" 42x30 [--nom] [--classes]
     if len(argv) >= 3:
         folder = argv[1]
         fmt = argv[2]
+        flags = set(argv[3:])
+        write_name = "--nom" in flags
+        classes_mode = "--classes" in flags
         try:
-            print(export_trombi(folder, fmt, console_mode=True))
+            if classes_mode:
+                print(export_trombi_classes(folder, fmt, write_name=write_name))
+            else:
+                print(export_trombi(folder, fmt, write_name=write_name, console_mode=True))
             return 0
         except Exception as e:
             print(f"Erreur: {e}")
