@@ -45,7 +45,7 @@ python Trombi_ecole.py "C:\Photos\Ecole" 42x30 --nom --classes
 
 ## Utilisation pas à pas
 
-1. Lancer le programme (ou double-cliquer sur `Trombi_Ecole_V1.0.exe` sous Windows).
+1. Lancer le programme (ou double-cliquer sur `Trombi_Ecole_V1.1.exe` sous Windows).
 2. Choisir le dossier contenant les photos des élèves (ou, si la case
    « sous-dossiers de classes » est cochée, le dossier de l'école contenant
    un sous-dossier par classe).
@@ -62,9 +62,9 @@ python Trombi_ecole.py "C:\Photos\Ecole" 42x30 --nom --classes
 ## Fichiers importants
 
 - `Trombi_ecole.py` : script Python principal.
-- `Trombi_Ecole_V1.0.spec` : recette de build PyInstaller (voir plus bas).
+- `Trombi_Ecole_V1.1.spec` : recette de build PyInstaller (voir plus bas).
 - `icone trombi indiv.png` / `icone_trombi_indiv.ico` : source et export de l'icône de l'exécutable.
-- `dist/Trombi_Ecole_V1.0.exe` : exécutable Windows, généré par le build (non versionné, voir plus bas).
+- `dist/Trombi_Ecole_V1.1.exe` : exécutable Windows, généré par le build (non versionné, voir plus bas).
 - `GUIDE_UTILISATEUR.md` : notice destinée à quelqu'un qui utilise seulement l'exécutable, sans toucher au code.
 - `trombi_keep.txt` (optionnel, dans le dossier de photos) : liste les photos à **inclure** dans le trombi, une par ligne, avec le nom exact du fichier et son extension. Sert notamment à exclure automatiquement les ardoises. Si le fichier est absent, toutes les photos du dossier sont utilisées.  
   Exemple :
@@ -85,9 +85,9 @@ L'exécutable n'est pas versionné dans le dépôt (un binaire compilé n'a pas 
 l'historique Git — voir `.gitignore`, `dist/` est ignoré). Pour le refabriquer :
 
 pip install pyinstaller
-pyinstaller Trombi_Ecole_V1.0.spec
+pyinstaller Trombi_Ecole_V1.1.spec
 
-Le résultat apparaît dans `dist/Trombi_Ecole_V1.0.exe`. Le `.spec` contient déjà l'icône et
+Le résultat apparaît dans `dist/Trombi_Ecole_V1.1.exe`. Le `.spec` contient déjà l'icône et
 les options utilisées (un seul fichier, sans console).
 
 ## État actuel du projet

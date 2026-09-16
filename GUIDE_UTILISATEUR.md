@@ -8,7 +8,7 @@ transparent, à poser en calque sur un fond déjà préparé (dans Photoshop par
 exemple), avec le nom de l'école ajouté au centre.
 
 Aucune installation n'est nécessaire : il suffit d'avoir le fichier
-`Trombi_Ecole_V1.0.exe`.
+`Trombi_Ecole_V1.1.exe`.
 
 ## Avant de commencer
 
@@ -19,7 +19,7 @@ Aucune installation n'est nécessaire : il suffit d'avoir le fichier
 
 ## Étape par étape
 
-1. Double-cliquez sur `Trombi_Ecole_V1.0.exe`.
+1. Double-cliquez sur `Trombi_Ecole_V1.1.exe`.
 
 2. Cliquez sur **Parcourir…** et choisissez le dossier contenant les photos
    de l'école.

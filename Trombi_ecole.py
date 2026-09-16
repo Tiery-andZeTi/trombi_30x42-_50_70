@@ -659,7 +659,7 @@ def export_trombi_classes(school_folder: str, fmt_key: str, write_name: bool = F
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Trombi École V1.0")
+        root.title("Trombi École V1.1")
         root.geometry("520x280")
 
         self.folder_var = tk.StringVar()
